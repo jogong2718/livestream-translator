@@ -1,5 +1,7 @@
 # Livestream Translator
 
+Ever wanted to know what your fav vtubers were saying? Well with the power AI we can now do live translation~!
+
 Example (isn't a livestream but works for normal vids too. technically anything that has audio output from your speakers):
 ![Alt text](image.png) 
 
