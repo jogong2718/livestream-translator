@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import signal
 import sys
+import warnings
 from queue import Queue
 
 from PyQt6.QtWidgets import QApplication
@@ -19,6 +20,13 @@ from PyQt6.QtWidgets import QApplication
 from audio_stream import AudioStream, list_audio_devices
 from overlay_ui import OverlayWindow
 from translator import TranslationResult, Translator
+
+warnings.filterwarnings(
+    "ignore",
+    message="macOS does not support loopback recording functionality",
+    category=Warning,
+    module=r"soundcard\.coreaudio",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,6 +58,42 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.35,
         help="Silero VAD speech probability threshold (default: 0.35)",
+    )
+    p.add_argument(
+        "--min-chunk-sec",
+        type=float,
+        default=0.6,
+        help="Minimum final speech chunk length in seconds (default: 0.6)",
+    )
+    p.add_argument(
+        "--min-partial-chunk-sec",
+        type=float,
+        default=0.4,
+        help="Minimum partial chunk length in seconds (default: 0.4)",
+    )
+    p.add_argument(
+        "--max-chunk-sec",
+        type=float,
+        default=10.0,
+        help="Maximum speech chunk length in seconds (default: 10.0)",
+    )
+    p.add_argument(
+        "--partial-window-sec",
+        type=float,
+        default=4.0,
+        help="Tail window length for partial updates in seconds (default: 4.0)",
+    )
+    p.add_argument(
+        "--partial-update-sec",
+        type=float,
+        default=2.0,
+        help="How often to emit partial updates in seconds (default: 2.0)",
+    )
+    p.add_argument(
+        "--source-language",
+        type=str,
+        default=None,
+        help="Force source language (e.g. 'ja' for Japanese). Default: auto-detect.",
     )
     p.add_argument(
         "--list-devices",
@@ -110,6 +154,7 @@ def main():
         model_size=args.model,
         compute_type=args.compute_type,
         device="cpu",
+        source_language=args.source_language,
     )
     # Load model synchronously so the user sees progress in the console
     translator.load_model()
@@ -122,6 +167,11 @@ def main():
         output_queue=audio_queue,
         device_keyword=args.device_keyword,
         vad_threshold=args.vad_threshold,
+        min_speech_chunk_sec=args.min_chunk_sec,
+        min_partial_chunk_sec=args.min_partial_chunk_sec,
+        max_speech_chunk_sec=args.max_chunk_sec,
+        partial_window_sec=args.partial_window_sec,
+        partial_update_sec=args.partial_update_sec,
     )
 
     # ------------------------------------------------------------------

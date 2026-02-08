@@ -106,9 +106,13 @@ class OverlayWindow(QWidget):
         # Resize to fit text
         self.adjustSize()
 
-        # Desired width: up to 90% of screen
-        max_w = int(geom.width() * 0.9)
-        w = min(self.sizeHint().width(), max_w)
+        # Use a fixed wide overlay so multiline romaji never clips
+        max_w = int(geom.width() * 0.6)
+        w = max_w
+        margins = self.layout().contentsMargins()
+        inner_w = max(0, w - (margins.left() + margins.right()))
+        self.label.setFixedWidth(inner_w)
+        self.romaji_label.setFixedWidth(inner_w)
         h = self.sizeHint().height()
 
         x = geom.x() + (geom.width() - w) // 2

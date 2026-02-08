@@ -1,11 +1,16 @@
 # Livestream Translator
 
+Example (isn't a livestream but works for normal vids too. technically anything that has audio output from your speakers):
+![Alt text](image.png) 
+
 Real-time desktop audio translator overlay. Captures system audio, transcribes/translates it using Faster-Whisper, and displays English subtitles in a transparent always-on-top window. Includes romaji output for Japanese source audio.
+
+This uses your local machine to run its models so if your laptop or pc is crappy too bad. Also this is just for mac for now. Or at least optimized for it didn't test other OSs.
 
 ## Architecture
 
 ```
-┌──────────────┐     Queue     ┌──────────────┐   signal    ┌──────────────┐
+┌──────────────┐     Queue    ┌──────────────┐   signal    ┌──────────────┐
 │ audio_stream │ ──────────▶  │  translator  │ ──────────▶ │  overlay_ui  │
 │   (thread)   │  float32 PCM │   (thread)   │  text+romaji│  (Qt main)   │
 └──────────────┘              └──────────────┘             └──────────────┘
@@ -67,17 +72,32 @@ python main.py --list-devices
 
 # Adjust VAD sensitivity (lower = more sensitive, default 0.35)
 python main.py --vad-threshold 0.25
+
+# Force source language to japanese for example
+python main.py --source-language ja
+
+# Longer chunks (more context, higher latency)
+python main.py --max-chunk-sec 12 --partial-window-sec 6 --partial-update-sec 3
+
+# My preferred command for vtubers (cuz they speak hella fast)
+python main.py --vad-threshold 0.01 --source-language ja --model small --min-chunk-sec 2 --min-partial-chunk-sec 2 --max-chunk-sec 12 --partial-window-sec 6 --partial-update-sec 3
 ```
 
 ### Command-line Options
 
-| Flag               | Default  | Description                                      |
-|--------------------|----------|--------------------------------------------------|
-| `--model`          | `small`  | Whisper model size                               |
-| `--compute-type`   | `int8`   | Quantization: `int8`, `float16`, `float32`       |
-| `--device-keyword` | auto     | Keyword to match audio device (e.g. `blackhole`) |
-| `--vad-threshold`  | `0.35`   | Silero VAD speech probability threshold           |
-| `--list-devices`   |          | Print audio devices and exit                     |
+| Flag                    | Default  | Description                                                |
+|-------------------------|----------|------------------------------------------------------------|
+| `--model`               | `small`  | Whisper model size (`tiny`, `base`, `small`, etc.)          |
+| `--compute-type`        | `int8`   | Quantization: `int8`, `float16`, `float32`                 |
+| `--device-keyword`      | auto     | Keyword to match audio device (e.g. `blackhole`)           |
+| `--vad-threshold`       | `0.35`   | Silero VAD speech probability threshold                    |
+| `--min-chunk-sec`       | `0.6`    | Minimum final speech chunk length in seconds               |
+| `--min-partial-chunk-sec` | `0.4`  | Minimum partial chunk length in seconds                    |
+| `--max-chunk-sec`       | `10.0`   | Maximum speech chunk length in seconds                     |
+| `--partial-window-sec`  | `4.0`    | Tail window length for partial updates in seconds          |
+| `--partial-update-sec`  | `2.0`    | How often to emit partial updates in seconds               |
+| `--list-devices`        |          | Print audio devices and exit                               |
+| `--source-language`     |          | language to translate from default is auto detect          |
 
 ## How It Works
 

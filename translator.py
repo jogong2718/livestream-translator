@@ -6,6 +6,7 @@ Supports translation to English and optional Japanese → romaji conversion.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -48,6 +49,11 @@ def to_romaji(text: str) -> str:
         return ""
 
 
+def _contains_japanese(text: str) -> bool:
+    """Return True if text contains Japanese characters."""
+    return bool(re.search(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]", text))
+
+
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
@@ -61,6 +67,7 @@ class TranslationResult:
     language: str = ""
     duration: float = 0.0
     timestamp: float = field(default_factory=time.time)
+    is_partial: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -80,12 +87,14 @@ class Translator:
         model_size: str = "small",
         compute_type: str = "int8",
         device: str = "cpu",
+        source_language: Optional[str] = None,
     ):
         self.input_queue = input_queue
         self.on_result = on_result
         self.model_size = model_size
         self.compute_type = compute_type
         self.device = device
+        self.source_language = source_language
 
         self._model: Optional[WhisperModel] = None
         self._stop_event = threading.Event()
@@ -128,31 +137,52 @@ class Translator:
     def _inference_loop(self):
         while not self._stop_event.is_set():
             try:
-                audio: np.ndarray = self.input_queue.get(timeout=0.5)
+                item = self.input_queue.get(timeout=0.5)
             except Empty:
                 continue
 
             try:
-                result = self._transcribe(audio)
+                if isinstance(item, tuple) and len(item) == 2:
+                    audio, is_partial = item
+                else:
+                    audio, is_partial = item, False
+                backlog = self.input_queue.qsize()
+                # If we're falling behind, drop partials and skip slow extras.
+                if is_partial and backlog > 0:
+                    continue
+                result = self._transcribe(
+                    audio,
+                    is_partial=is_partial,
+                    allow_romaji=(backlog == 0),
+                )
                 if result and result.text.strip():
                     self.on_result(result)
             except Exception as exc:
                 print(f"[Translator] Inference error: {exc}")
 
-    def _transcribe(self, audio: np.ndarray) -> Optional[TranslationResult]:
+    def _transcribe(
+        self,
+        audio: np.ndarray,
+        is_partial: bool = False,
+        allow_romaji: bool = True,
+    ) -> Optional[TranslationResult]:
         """Run Whisper translate on a float32 16 kHz mono numpy array."""
         duration = len(audio) / 16_000
         t0 = time.time()
 
+        beam_size = 1 if is_partial else 3
+        best_of = 1 if is_partial else 3
+        t_transcribe_start = time.time()
         segments, info = self._model.transcribe(
             audio,
             task="translate",  # always output English
-            beam_size=3,
-            best_of=3,
-            language=None,  # auto-detect
+            beam_size=beam_size,
+            best_of=best_of,
+            language=self.source_language,  # auto-detect if None
             vad_filter=False,  # we already did VAD
             without_timestamps=True,
         )
+        transcribe_elapsed = time.time() - t_transcribe_start
 
         # Collect segment texts
         texts = []
@@ -163,18 +193,29 @@ class Translator:
         elapsed = time.time() - t0
         detected_lang = info.language if info else "?"
 
+        kind = "partial" if is_partial else "final"
         print(
-            f"[Translator] {detected_lang} | {duration:.1f}s audio → "
-            f"{elapsed:.2f}s inference | {full_text[:80]}"
+            f"[Translator] {kind} {detected_lang} | {duration:.1f}s audio → "
+            f"{transcribe_elapsed:.2f}s whisper | {elapsed:.2f}s total | {full_text[:80]}"
         )
 
-        # Generate romaji if the detected language is Japanese
+        # Generate romaji only for Japanese to keep latency down
         romaji = ""
-        if detected_lang == "ja":
+        if detected_lang == "ja" and not is_partial and allow_romaji:
             # For romaji we want the *original* text, not the translation.
             # Re-run a quick transcription in transcribe mode to get the
-            # Japanese source text.
-            romaji = self._get_romaji(audio)
+            # Japanese source text, then only keep romaji if it contains JP.
+            t_romaji_start = time.time()
+            jp_text = self._get_japanese_text(audio, is_partial=False)
+            if _contains_japanese(jp_text):
+                romaji = to_romaji(jp_text)
+                if not romaji:
+                    romaji = jp_text
+                    print("[Translator] Romaji unavailable; showing Japanese text instead.")
+            romaji_elapsed = time.time() - t_romaji_start
+            print(f"[Translator] romaji generation: {romaji_elapsed:.2f}s")
+        elif detected_lang == "ja" and not is_partial and not allow_romaji:
+            print("[Translator] Skipping romaji due to backlog.")
 
         return TranslationResult(
             text=full_text,
@@ -182,24 +223,23 @@ class Translator:
             language=detected_lang,
             duration=duration,
             timestamp=time.time(),
+            is_partial=is_partial,
         )
 
-    def _get_romaji(self, audio: np.ndarray) -> str:
-        """
-        Re-transcribe in 'transcribe' mode to get the original Japanese,
-        then convert to romaji.
-        """
+    def _get_japanese_text(self, audio: np.ndarray, is_partial: bool = False) -> str:
+        """Re-transcribe in 'transcribe' mode to get the original Japanese."""
         try:
+            beam_size = 1 if is_partial else 2
+            best_of = 1 if is_partial else 2
             segments, _ = self._model.transcribe(
                 audio,
                 task="transcribe",
                 language="ja",
-                beam_size=1,
-                best_of=1,
+                beam_size=beam_size,
+                best_of=best_of,
                 without_timestamps=True,
             )
-            jp_text = " ".join(seg.text.strip() for seg in segments)
-            return to_romaji(jp_text)
+            return " ".join(seg.text.strip() for seg in segments)
         except Exception as exc:
-            print(f"[Translator] Romaji generation failed: {exc}")
+            print(f"[Translator] Japanese transcription failed: {exc}")
             return ""
