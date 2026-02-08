@@ -1,0 +1,20 @@
+# Audio capture
+soundcard>=0.4.4
+numpy>=1.24.0
+
+# Speech-to-text inference (CTranslate2 backend)
+faster-whisper>=1.0.0
+
+# Voice Activity Detection
+silero-vad>=5.1
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Japanese romaji conversion
+pykakasi>=2.2.1
+
+# UI overlay
+PyQt6>=6.5.0
+# macOS native window management
+pyobjc-framework-Cocoa>=10.0.0
+
