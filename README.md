@@ -64,6 +64,9 @@ python main.py
 # Specify model size (tiny/base/small/medium/large-v2/large-v3)
 python main.py --model base
 
+# Use GPU if available (NVIDIA CUDA only)
+python main.py --device cuda --compute-type float16
+
 # Specify the audio device keyword
 python main.py --device-keyword "blackhole"
 
@@ -77,10 +80,13 @@ python main.py --vad-threshold 0.25
 python main.py --source-language ja
 
 # Longer chunks (more context, higher latency)
-python main.py --max-chunk-sec 12 --partial-window-sec 6 --partial-update-sec 3
+python main.py --max-chunk-sec 12
+
+# Increase CPU threads for Whisper
+python main.py --cpu-threads 8
 
 # My preferred command for vtubers (cuz they speak hella fast)
-python main.py --vad-threshold 0.01 --source-language ja --model small --min-chunk-sec 2 --min-partial-chunk-sec 2 --max-chunk-sec 12 --partial-window-sec 6 --partial-update-sec 3
+python main.py --cpu-threads 12 --vad-threshold 0.2 --source-language ja --model small --min-chunk-sec 1 --max-chunk-sec 12
 ```
 
 ### Command-line Options
@@ -89,13 +95,12 @@ python main.py --vad-threshold 0.01 --source-language ja --model small --min-chu
 |-------------------------|----------|------------------------------------------------------------|
 | `--model`               | `small`  | Whisper model size (`tiny`, `base`, `small`, etc.)          |
 | `--compute-type`        | `int8`   | Quantization: `int8`, `float16`, `float32`                 |
+| `--device`              | `cpu`    | Device backend (`cpu`, `cuda`, `auto`)                     |
+| `--cpu-threads`         | `4`      | CPU threads for Whisper                                    |
 | `--device-keyword`      | auto     | Keyword to match audio device (e.g. `blackhole`)           |
 | `--vad-threshold`       | `0.35`   | Silero VAD speech probability threshold                    |
 | `--min-chunk-sec`       | `0.6`    | Minimum final speech chunk length in seconds               |
-| `--min-partial-chunk-sec` | `0.4`  | Minimum partial chunk length in seconds                    |
 | `--max-chunk-sec`       | `10.0`   | Maximum speech chunk length in seconds                     |
-| `--partial-window-sec`  | `4.0`    | Tail window length for partial updates in seconds          |
-| `--partial-update-sec`  | `2.0`    | How often to emit partial updates in seconds               |
 | `--list-devices`        |          | Print audio devices and exit                               |
 | `--source-language`     |          | language to translate from default is auto detect          |
 

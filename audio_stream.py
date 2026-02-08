@@ -28,9 +28,7 @@ BLOCK_DURATION_MS = int(1000 * BLOCK_SIZE / SAMPLE_RATE)
 # How many seconds of audio to accumulate before sending a chunk to Whisper
 # Lower values reduce latency but can reduce accuracy.
 DEFAULT_MIN_SPEECH_CHUNK_SEC = 0.6
-DEFAULT_MIN_PARTIAL_CHUNK_SEC = 0.4
 DEFAULT_MAX_SPEECH_CHUNK_SEC = 10.0
-DEFAULT_PARTIAL_WINDOW_SEC = 4.0
 
 # Padding: keep a little audio before/after speech to avoid clipping words
 SPEECH_PAD_MS = 300
@@ -38,10 +36,6 @@ SPEECH_PAD_FRAMES = int(SPEECH_PAD_MS / BLOCK_DURATION_MS)
 
 # Silence duration (in frames) that ends a speech segment
 SILENCE_FRAMES_THRESHOLD = int(300 / BLOCK_DURATION_MS)  # 300 ms silence
-
-# Emit partial updates while speech is ongoing (latency vs. accuracy trade-off)
-DEFAULT_PARTIAL_UPDATE_SEC = 2.0
-
 
 # ---------------------------------------------------------------------------
 # Device helpers
@@ -130,10 +124,7 @@ class AudioStream:
         device_keyword: Optional[str] = None,
         vad_threshold: float = 0.35,
         min_speech_chunk_sec: float = DEFAULT_MIN_SPEECH_CHUNK_SEC,
-        min_partial_chunk_sec: float = DEFAULT_MIN_PARTIAL_CHUNK_SEC,
         max_speech_chunk_sec: float = DEFAULT_MAX_SPEECH_CHUNK_SEC,
-        partial_window_sec: float = DEFAULT_PARTIAL_WINDOW_SEC,
-        partial_update_sec: float = DEFAULT_PARTIAL_UPDATE_SEC,
     ):
         self.output_queue = output_queue
         self.device = device or find_loopback_device(device_keyword)
@@ -141,12 +132,7 @@ class AudioStream:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self.min_speech_chunk_sec = min_speech_chunk_sec
-        self.min_partial_chunk_sec = min_partial_chunk_sec
         self.max_speech_chunk_sec = max_speech_chunk_sec
-        self.partial_window_sec = partial_window_sec
-        self.partial_update_frames = max(
-            1, int((partial_update_sec * 1000) / BLOCK_DURATION_MS)
-        )
 
     # ---- public API -------------------------------------------------------
 
@@ -170,7 +156,6 @@ class AudioStream:
         """Main loop: read frames → VAD → accumulate → enqueue."""
         speech_buffer: list[np.ndarray] = []
         silent_frames = 0
-        last_partial_flush_frames = 0
         is_speaking = False
 
         try:
@@ -190,7 +175,6 @@ class AudioStream:
                         silent_frames = 0
                         if not is_speaking:
                             is_speaking = True
-                            last_partial_flush_frames = 0
                             # Prepend padding frames already in buffer
                             # (they were kept from the ring below)
                         speech_buffer.append(mono)
@@ -201,7 +185,7 @@ class AudioStream:
 
                             if silent_frames >= SILENCE_FRAMES_THRESHOLD:
                                 # End of speech segment → push to queue
-                                self._flush_buffer(speech_buffer, is_partial=False)
+                                self._flush_buffer(speech_buffer)
                                 speech_buffer = []
                                 silent_frames = 0
                                 is_speaking = False
@@ -214,11 +198,8 @@ class AudioStream:
 
                     # Safety: if someone talks forever, flush at MAX length
                     total_sec = len(speech_buffer) * BLOCK_DURATION_MS / 1000
-                    if is_speaking and (len(speech_buffer) - last_partial_flush_frames) >= self.partial_update_frames:
-                        self._flush_buffer(speech_buffer, is_partial=True)
-                        last_partial_flush_frames = len(speech_buffer)
                     if is_speaking and total_sec >= self.max_speech_chunk_sec:
-                        self._flush_buffer(speech_buffer, is_partial=False)
+                        self._flush_buffer(speech_buffer)
                         speech_buffer = []
                         silent_frames = 0
                         is_speaking = False
@@ -227,32 +208,17 @@ class AudioStream:
         except Exception as exc:
             print(f"[AudioStream] Error in capture loop: {exc}")
 
-    def _flush_buffer(self, frames: list[np.ndarray], is_partial: bool = False):
+    def _flush_buffer(self, frames: list[np.ndarray]):
         """Concatenate buffered frames and push if long enough."""
         if not frames:
             return
         audio = np.concatenate(frames)
         duration = len(audio) / SAMPLE_RATE
-        min_sec = self.min_partial_chunk_sec if is_partial else self.min_speech_chunk_sec
-        if duration < min_sec:
+        if duration < self.min_speech_chunk_sec:
             return  # too short – probably noise
-        if is_partial:
-            print(f"[AudioStream] Flushing {duration:.2f}s partial segment to queue.")
-        else:
-            print(f"[AudioStream] Flushing {duration:.2f}s speech segment to queue.")
-        if is_partial:
-            # Only send the tail window to keep partials light and current.
-            max_samples = int(self.partial_window_sec * SAMPLE_RATE)
-            if len(audio) > max_samples:
-                audio = audio[-max_samples:]
-            try:
-                self.output_queue.put_nowait((audio, is_partial))
-            except Full:
-                # Drop partials if the translator is behind.
-                pass
-        else:
-            # Finals are more important; block briefly to enqueue.
-            try:
-                self.output_queue.put((audio, is_partial), timeout=1.0)
-            except Full:
-                print("[AudioStream] Queue full; dropped final segment.")
+        print(f"[AudioStream] Flushing {duration:.2f}s speech segment to queue.")
+        # Finals are more important; block briefly to enqueue.
+        try:
+            self.output_queue.put(audio, timeout=1.0)
+        except Full:
+            print("[AudioStream] Queue full; dropped final segment.")
